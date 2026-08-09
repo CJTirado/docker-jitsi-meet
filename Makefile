@@ -13,6 +13,13 @@ ifeq ($(FORCE_REBUILD), 1)
   BUILD_ARGS := $(BUILD_ARGS) --no-cache
 endif
 
+# Fortress (FOR-59): jibri builds its jar from Codebase/jibri (this repo's vendored,
+# patched jitsi/jibri fork), which lives outside the jibri/ build context -- passed in as
+# a named build context (see jibri/Dockerfile's "FROM ... AS jibri-builder" stage).
+ifeq ($(JITSI_SERVICE), jibri)
+  BUILD_ARGS := $(BUILD_ARGS) --build-context jibri-src=../jibri
+endif
+
 
 all:
 	$(MAKE) build-all JITSI_REPO="jitsi"
