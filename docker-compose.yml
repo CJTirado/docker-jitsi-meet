@@ -193,6 +193,14 @@ services:
             - WHITEBOARD_COLLAB_SERVER_URL_BASE
         networks:
             meet.jitsi:
+                # Fortress (FOR-59): without this, "meet.jitsi" (the PUBLIC_URL host) isn't a
+                # resolvable Docker network alias for any container -- prosody registers its
+                # own alias for XMPP_SERVER (see below), but nothing did the same for web.
+                # Any browser-based internal client (Jibri's Selenium Chrome, joining via
+                # PUBLIC_URL to record) fails with ERR_CONNECTION_REFUSED as a result, since
+                # "meet.jitsi" falls through to the host's own /etc/hosts (127.0.0.1) instead.
+                aliases:
+                    - ${XMPP_DOMAIN:-meet.jitsi}
         depends_on:
             - jvb
 
