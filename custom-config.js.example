@@ -1,0 +1,23 @@
+// Fortress-specific additions to config.js.
+//
+// Upstream docker-jitsi-meet renders config.js from web/rootfs/defaults/{system,settings}-config.js
+// and then appends ${CONFIG}/web/custom-config.js if present (see
+// web/rootfs/etc/s6-overlay/scripts/config) -- this is the supported extension point for
+// anything that isn't part of stock Jitsi Meet, like exhibitViewer below.
+//
+// This matters locally too: Fortress/webpack.config.js's dev-server proxy does NOT serve
+// Codebase/Fortress/config.js -- it proxies /config.js straight through to this container's
+// rendered one, so editing Fortress/config.js alone is a no-op. exhibitViewer has to be added
+// here instead, or exhibit publishing fails client-side with "exhibitViewer.apiUrl is not
+// configured" even though exhibit-service itself is up and healthy.
+//
+// Setup:
+//   cp custom-config.js.example ${CONFIG:-~/.jitsi-meet-cfg}/web/custom-config.js
+//   docker compose --env-file .env -f docker-compose.yml restart web
+//
+// (restart, not up -d -- compose won't detect a change to a file mounted from the host)
+
+config.exhibitViewer = {
+    enabled: true,
+    apiUrl: 'https://localhost:4000'
+};
