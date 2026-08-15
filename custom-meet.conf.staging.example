@@ -139,6 +139,39 @@ location @gate_redirect {
     return 302 $scheme://$host/gate/;
 }
 
+# No custom favicon exists yet -- this always 404s from the base image's
+# own document root. Exempted from the gate entirely (not just left to be
+# gated normally) because browsers request this automatically alongside
+# every single page load, including the very first unauthenticated visit --
+# so it races the real page's request to set the post_login_redirect cookie
+# above. Set-Cookie overwrites, so whichever 401 response lands last wins,
+# and when it's this one, login redirects the user straight into a
+# pre-meeting screen for a "meeting" called favicon.ico instead of the
+# welcome page (Jitsi's tenant-subdomain routing treats any bare
+# single-segment path as a room name to join directly). Confirmed via a live
+# test that this is exactly what was happening. Tried gating this normally
+# but only skipping the cookie-set via an `if ($http_accept !~* "text/html")`
+# check inside @gate_redirect first -- didn't work reliably (add_header
+# still fired for non-html Accept headers, a known rough edge of `if` inside
+# a named location reached via error_page), so exempting the request
+# entirely instead, same pattern as /gate-check and /gate/ below.
+#
+# `return 204`, not `return 404` -- the base image's own default meet.conf
+# has `error_page 404 /static/404.html;` at server level (inherited here
+# same as everything else), and a bare 404 from this location triggers that
+# mapping as a URI-based internal redirect (not a named-location one), which
+# unlike error_page's `= @name` form DOES cause full phase reprocessing for
+# the new URI -- re-entering the same satisfy/auth_request gate on
+# /static/404.html and, once that 404s too, looping until nginx's internal
+# redirect-cycle guard gives up and surfaces a bare 401 with no body. 204
+# isn't mapped by any error_page directive here, so it skips all of that;
+# browsers treat a 204 favicon response the same as a 404 (no icon shown).
+location = /favicon.ico {
+    auth_request off;
+    allow all;
+    return 204;
+}
+
 location = /gate-check {
     internal;
     auth_request off;
