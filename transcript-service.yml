@@ -1,0 +1,17 @@
+# Overlay adding transcript-service to the same compose project/network as
+# the rest of the stack -- same pattern as exhibit-service.yml, see that
+# file's header comment for the full explanation. MUST be brought up
+# together with docker-compose.yml (and usually jibri.yml) in one
+# invocation:
+#
+#   docker compose --env-file .env -f docker-compose.yml -f jibri.yml -f exhibit-service.yml -f transcript-service.yml up -d
+services:
+    transcript-service:
+        build:
+            context: ../transcript-service
+        image: fortress/transcript-service:staging
+        restart: ${RESTART_POLICY:-unless-stopped}
+        env_file:
+            - ../transcript-service/.env.staging
+        networks:
+            meet.jitsi:

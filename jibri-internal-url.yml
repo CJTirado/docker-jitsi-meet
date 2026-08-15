@@ -1,0 +1,30 @@
+# Fixes a pre-existing bug, unrelated to the password gate (staging-gate.yml)
+# despite touching the same `jibri` service -- kept separate deliberately so
+# removing the gate later doesn't accidentally reintroduce this.
+#
+# nginx's internal listen ports are hardcoded to 8000/8443 in the base
+# image (web/rootfs/defaults/default -- literal numbers, NOT templated from
+# HTTP_PORT/HTTPS_PORT). Local dev's PUBLIC_URL already includes an
+# explicit port (https://meet.jitsi:8443) that happens to match, because
+# local dev's host port mapping is also 8443:8443 (no translation). Staging
+# deliberately maps host 443 -> container 8443 for a clean public URL
+# (https://staging.fortressconferencing.com, no port) -- fine for real
+# external users going through that host-level port translation, but
+# broken for Jibri: its internal headless Chrome resolves the domain
+# directly to the `web` container's own IP via the FOR-59 network alias
+# and connects straight to it, bypassing host-level port translation
+# entirely -- so port 443 simply doesn't exist to connect to from there
+# (confirmed: `docker exec jibri curl https://.../:443` -> connection
+# refused; `curl https://.../:8443` -> 200).
+#
+# jibri/rootfs/defaults/xmpp.conf's `base-url` (what Jibri's Chrome
+# navigates to) is driven verbatim by $ENV.PUBLIC_URL with no separate
+# override var in the vendored template -- can't fix this by changing the
+# global PUBLIC_URL (that's shared with prosody/jicofo/jvb/web and would
+# break the clean external URL / config.js for real users too). Instead,
+# override PUBLIC_URL for just the jibri service/container to explicitly
+# use the real internal port.
+services:
+    jibri:
+        environment:
+            - PUBLIC_URL=https://staging.fortressconferencing.com:8443

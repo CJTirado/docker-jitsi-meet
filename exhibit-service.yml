@@ -1,0 +1,22 @@
+# Overlay adding exhibit-service to the same compose project/network as the
+# rest of the stack, so it gets the container-DNS name "exhibit-service" on
+# the meet.jitsi network for free -- required by the reverse-proxy block in
+# ${CONFIG}/web/nginx/custom-meet.conf (see docker-jitsi-meet/README or the
+# staging runbook). MUST be brought up together with docker-compose.yml (and
+# usually jibri.yml) in one invocation, e.g.:
+#
+#   docker compose --env-file .env -f docker-compose.yml -f jibri.yml -f exhibit-service.yml up -d
+#
+# Running this file standalone would create it under a separate Compose
+# project with its own separate meet.jitsi network, and nginx's proxy_pass
+# to http://exhibit-service:4000 would fail to resolve.
+services:
+    exhibit-service:
+        build:
+            context: ../exhibit-service
+        image: fortress/exhibit-service:staging
+        restart: ${RESTART_POLICY:-unless-stopped}
+        env_file:
+            - ../exhibit-service/.env.staging
+        networks:
+            meet.jitsi:

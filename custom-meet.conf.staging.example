@@ -1,0 +1,176 @@
+# Staging-only: reverse-proxies exhibit-service under the same domain/cert
+# as the rest of the stack, so a second DNS record + second Let's Encrypt
+# cert isn't needed. Gets appended verbatim into the rendered meet.conf
+# (included inside both the :80 and :443 server blocks) by
+# web/rootfs/etc/s6-overlay/scripts/config, which looks for exactly this
+# path -- see that script for the mechanism.
+#
+# Setup on the staging box:
+#   mkdir -p ${CONFIG:-~/.jitsi-meet-cfg}/web/nginx
+#   cp custom-meet.conf.staging.example ${CONFIG:-~/.jitsi-meet-cfg}/web/nginx/custom-meet.conf
+#   docker compose --env-file .env -f docker-compose.yml -f jibri.yml -f exhibit-service.yml -f transcript-service.yml -f staging-gate.yml -f jibri-internal-url.yml restart web
+#
+# The frontend calls `${apiUrl}/api/exhibits` where apiUrl is
+# "https://staging.fortressconferencing.com/exhibit-api" (see
+# custom-config.js.staging.example) -- i.e. the actual request path is
+# /exhibit-api/api/exhibits, and the /exhibit-api prefix needs to be
+# stripped before forwarding so the upstream sees /api/exhibits, matching
+# exhibit-service's own route mount (`app.use('/api/exhibits',
+# exhibitsRouter)` in src/index.ts) exactly.
+#
+# The `^~` modifier is required, not optional: stock meet.conf already has a
+# regex location (`location ~ ^/([^/?&:'"]+)/(.*)$`) implementing Jitsi's
+# tenant-subdomain URL scheme, which matches ANY multi-segment path like
+# /exhibit-api/api/exhibits. Nginx always prefers a matching regex location
+# over a prefix location, REGARDLESS of the prefix's specificity or where
+# either is declared in the file -- without `^~`, every request here gets
+# silently captured by that tenant rewrite instead of this proxy block,
+# manifesting as a confusing 405 (method-not-allowed on the rewritten SPA
+# route) instead of ever reaching exhibit-service. `^~` tells nginx "if this
+# prefix is the longest match, stop -- don't consider regex locations at
+# all," which is the standard fix for exactly this conflict.
+location ^~ /exhibit-api/ {
+    # Explicit rewrite+break to strip the /exhibit-api prefix; proxy_pass
+    # below has no URI part of its own, so nginx passes the (rewritten)
+    # request URI through as-is -- the standard, well-tested pattern for
+    # "strip a prefix, then proxy the rest".
+    rewrite ^/exhibit-api/(.*)$ /$1 break;
+
+    # Deliberately a STATIC proxy_pass target, not a variable-based one:
+    # tried the `set $var; proxy_pass $var...;` form first (intending
+    # per-request DNS re-resolution via Docker's embedded resolver, so an
+    # exhibit-service container recreate wouldn't also require restarting
+    # web) but hit two real nginx quirks in sequence on this build --
+    # variable targets silently disable proxy_pass's automatic URI
+    # substitution (every request reached the upstream as bare "/"), and
+    # even after working around that with the rewrite above, a bare
+    # variable target threw "invalid URL prefix" at runtime. Not worth
+    # fighting further for a single-instance staging box: exhibit-service
+    # rarely gets recreated independent of web, and when it does, restart
+    # web too (same as any other config change here).
+    proxy_pass http://exhibit-service:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# Reverse-proxies the deposition transcript panel's WebSocket connection to
+# transcript-service, same rationale as /exhibit-api/ above (one cert, one
+# DNS record). Frontend config sets this exact URL via
+# config.transcriptService.wsUrl (custom-config.js.staging.example) --
+# without it, transcript/middleware.ts falls back to an insecure
+# `ws://...:4100/ws/panel` URL, which browsers refuse to open from an HTTPS
+# page (mixed content) and throw a SecurityError. That error was thrown
+# synchronously from inside a CONFERENCE_JOINED handler running on
+# Strophe's own call stack, which took down Strophe's connection handlers
+# entirely -- the actual cause behind "Join meeting turns the button grey
+# and never joins", not a join-button bug at all.
+#
+# ^~ required for the same tenant-subdomain-regex-precedence reason
+# documented above. No rewrite needed -- this is a single fixed upstream
+# path, not multiple REST routes to preserve.
+location ^~ /transcript-ws/panel {
+    proxy_pass http://transcript-service:4100/ws/panel;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # WebSocket connections are long-lived; nginx's 60s default proxy
+    # timeout would silently kill idle transcript panel connections.
+    proxy_read_timeout 3600s;
+}
+
+# --- Password gate ---------------------------------------------------
+# Gates the ENTIRE staging site (not just an API path like the two blocks
+# above) behind a branded login page + signed cookie, checked via nginx's
+# auth_request module (bundled in this image's nginx-extras package).
+#
+# HTTP Basic Auth was the obvious simpler alternative but was ruled out:
+# Fortress also runs inside Electron, and Electron doesn't surface a
+# native basic-auth prompt unless the app explicitly wires up its `login`
+# event -- a custom HTML page works identically in a normal browser or
+# Electron's renderer since it's just a form + cookie, no browser-chrome
+# UI involved.
+#
+# satisfy/allow/deny/auth_request/error_page below are bare siblings at
+# server scope (this file is `include`d directly inside both the :80 and
+# :443 server{} blocks by web/rootfs/defaults/default) -- confirmed via a
+# dedicated review pass that this really is inherited by every OTHER
+# location already in meet.conf (the tenant-subdomain regex catch-all,
+# /http-bind, /xmpp-websocket, the two blocks above), with no wrapping
+# needed and no interference from the regex-location-precedence issue
+# documented above: the tenant-regex locations do a bare `rewrite` with no
+# `last`/`break`, which triggers an internal redirect BEFORE access-phase
+# runs, so the gate ends up enforced exactly once against each request's
+# final resolved location -- the correct place.
+satisfy any;
+allow 172.28.238.10/32;   # Jibri's pinned IP on meet.jitsi -- see staging-gate.yml.
+                          # Jibri's internal headless Chrome loads the meeting page
+                          # from this same public domain to record it (the FOR-59
+                          # network-alias fix is what makes that resolve internally),
+                          # so without this exemption the password gate would
+                          # silently break recording.
+deny all;
+auth_request /gate-check;
+error_page 401 = @gate_redirect;
+# If staging-gate itself is down, degrade to (an also-unreachable, but at
+# least not a raw 500) login page rather than a bare 500 on every gated
+# path on the site.
+error_page 500 502 503 504 = @gate_redirect;
+
+location @gate_redirect {
+    # Cookie, not a query-string append: $request_uri is the client's raw
+    # request line and nginx does not URL-encode it when interpolated into
+    # `return`, so a query string with its own unescaped `&` (e.g. a gated
+    # API call) would get truncated/mangled. Cookie values don't have that
+    # problem (RFC 6265 cookie-octet permits ?, &, =, / unescaped).
+    add_header Set-Cookie "post_login_redirect=$request_uri; Path=/; Max-Age=300; HttpOnly; SameSite=Lax" always;
+    # $scheme://$host/gate/, not a bare "/gate/" -- nginx listens
+    # internally on 8443 (container port; HTTPS_PORT=443 is only the
+    # host-side docker port mapping), and a bare-path return here had
+    # nginx auto-constructing the Location header using that internal
+    # listen port, producing "https://staging.fortressconferencing.com:8443/gate/"
+    # -- a port that isn't even open on the security group. Real external
+    # clients would hit a dead connection on the redirect. $host carries
+    # no port, so this always resolves to the real public origin.
+    return 302 $scheme://$host/gate/;
+}
+
+location = /gate-check {
+    internal;
+    auth_request off;
+    # REQUIRED, not optional: `auth_request off` only neutralizes the
+    # precontent-phase auth_request check -- it does NOT clear the
+    # separately-inherited access-phase `deny all` above. auth_request's
+    # own subrequest still runs the full phase engine (including access
+    # phase) for ITS matched location, using the original client's
+    # $remote_addr. Without this line, every real client outside the
+    # allow CIDR gets a raw 403 here and never even reaches the login
+    # page -- a total self-lockout, caught in review before it shipped.
+    allow all;
+    proxy_pass http://staging-gate:4200/check;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Cookie $http_cookie;
+}
+
+# ^~ required for the same tenant-subdomain-regex-precedence reason as the
+# two blocks above.
+location ^~ /gate/ {
+    auth_request off;
+    allow all;   # same reasoning as /gate-check -- without this, real
+                 # external clients can never load the login page itself.
+    # Static proxy_pass target WITH a URI part ("/"), so nginx's automatic
+    # prefix-substitution applies: /gate/login on the client side reaches
+    # bare /login on staging-gate. The login form's action is therefore a
+    # relative "login" (not "/login"), and staging-gate's own routes are
+    # /, /login, /check -- no /gate prefix inside the app itself.
+    proxy_pass http://staging-gate:4200/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}

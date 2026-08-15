@@ -1,0 +1,28 @@
+// Staging variant of custom-config.js.example -- see that file for the full
+// explanation of why this extension point exists. Only difference from
+// local dev: apiUrl points at exhibit-service through the nginx reverse
+// proxy (custom-meet.conf.staging.example) under the same domain/cert,
+// instead of exhibit-service's own local port.
+//
+// Setup on the staging box:
+//   cp custom-config.js.staging.example ${CONFIG:-~/.jitsi-meet-cfg}/web/custom-config.js
+//   docker compose --env-file .env -f docker-compose.yml -f jibri.yml -f exhibit-service.yml -f transcript-service.yml -f staging-gate.yml -f jibri-internal-url.yml restart web
+//
+// (restart, not up -d -- compose won't detect a change to a file mounted from the host)
+
+config.exhibitViewer = {
+    enabled: true,
+    apiUrl: 'https://staging.fortressconferencing.com/exhibit-api'
+};
+
+// Without this, react/features/transcript/middleware.ts falls back to an
+// insecure `ws://${hostname}:4100/ws/panel` URL. Browsers refuse to open an
+// insecure WebSocket from an HTTPS page and throw a SecurityError -- and
+// because that throw happens synchronously inside a CONFERENCE_JOINED
+// handler running on Strophe's own call stack, it corrupts Strophe's
+// connection handlers entirely, breaking the conference for the rest of
+// the session even though the MUC join itself already succeeded. This is
+// the actual root cause behind "Join meeting goes grey and never joins."
+config.transcriptService = {
+    wsUrl: 'wss://staging.fortressconferencing.com/transcript-ws/panel'
+};

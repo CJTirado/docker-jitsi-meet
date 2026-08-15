@@ -1,0 +1,41 @@
+# Overlay adding staging-gate (the password-gate service in front of the
+# whole staging site) to the same compose project/network -- same pattern
+# as exhibit-service.yml/transcript-service.yml, see those files' header
+# comments. MUST be brought up together with docker-compose.yml (and
+# usually jibri.yml) in one invocation:
+#
+#   docker compose --env-file .env -f docker-compose.yml -f jibri.yml -f exhibit-service.yml -f transcript-service.yml -f staging-gate.yml -f jibri-internal-url.yml up -d
+#
+# Also pins the meet.jitsi network's subnet and Jibri's IP within it.
+# Docker auto-allocates the bridge subnet by default (no ipam.config in
+# docker-compose.yml), and that subnet isn't guaranteed stable across a
+# network recreation -- pinning it means the nginx `allow <jibri-ip>/32`
+# exemption in custom-meet.conf.staging.example (which lets Jibri's
+# internal recording browser bypass the password gate) survives network
+# churn instead of silently breaking with no nginx error.
+#
+# IMPORTANT: applying the pinned subnet requires `docker compose down` then
+# `up -d` (not just `restart` or a plain `up -d` on top of the running
+# stack) -- the whole meet.jitsi network gets recreated, which is a brief
+# FULL STACK interruption. Do this deliberately.
+networks:
+    meet.jitsi:
+        ipam:
+            config:
+                - subnet: 172.28.238.0/24
+
+services:
+    staging-gate:
+        build:
+            context: ../staging-gate
+        image: fortress/staging-gate:staging
+        restart: ${RESTART_POLICY:-unless-stopped}
+        env_file:
+            - ../staging-gate/.env.staging
+        networks:
+            meet.jitsi:
+
+    jibri:
+        networks:
+            meet.jitsi:
+                ipv4_address: 172.28.238.10
