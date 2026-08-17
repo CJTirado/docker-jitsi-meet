@@ -26,3 +26,13 @@ config.exhibitViewer = {
 config.transcriptService = {
     wsUrl: 'wss://staging.fortressconferencing.com/transcript-ws/panel'
 };
+
+// Fortress identity service (FOR-50) -- same reasoning as exhibitViewer
+// above: editing the client repo's checked-in config.js alone is a no-op,
+// this has to live here. apiUrl points at identity-service through the
+// nginx reverse proxy (custom-meet.conf.staging.example) under the same
+// domain/cert, instead of identity-service's own port.
+config.identityService = {
+    apiUrl: 'https://staging.fortressconferencing.com/identity-api',
+    enabled: true
+};
