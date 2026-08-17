@@ -1,0 +1,57 @@
+# Overlay adding a coturn TURN/STUN relay for clients whose network blocks
+# direct UDP to JVB (common on restrictive corporate/law-firm firewalls) --
+# without this, those clients have no relay fallback and their connection
+# can look fine for plain audio/video, then drop once something adds load
+# (e.g. loading a document into the exhibit viewer). See prosody's own
+# `external_services` block (rendered into prosody.cfg.lua from the
+# TURN_* env vars below by web/rootfs/etc/s6-overlay/scripts/config) --
+# only prosody needs recreating to pick this up, nothing else.
+#
+# Runs on the HOST network (not the meet.jitsi bridge) since it needs a wide
+# UDP relay port range reachable directly by browsers over the public
+# internet -- mapping thousands of individual ports through Docker's bridge
+# networking isn't practical. This means coturn is NOT reachable from other
+# containers by its compose service name; it's reached by clients directly
+# at the box's public IP.
+#
+# MUST be brought up together with docker-compose.yml in one invocation,
+# same as every other overlay here, e.g.:
+#
+#   docker compose --env-file .env -f docker-compose.yml -f jibri.yml \
+#     -f exhibit-service.yml -f transcript-service.yml -f identity-service.yml \
+#     -f staging-gate.yml -f jibri-internal-url.yml -f turn.yml up -d
+#
+# After changing .env's TURN_* values, prosody also needs re-upped (not just
+# restarted) to re-render its config from the new env -- see infra/staging's
+# runbook.
+services:
+    coturn:
+        image: coturn/coturn:4.6.2
+        restart: ${RESTART_POLICY:-unless-stopped}
+        network_mode: host
+        command:
+            - -n
+            - --listening-port=3478
+            - --realm=${TURN_HOST:?TURN_HOST must be set in .env}
+            # <public-ip>/<private-ip>: tells coturn what to advertise in relay
+            # candidates (the EC2 instance's Elastic IP, since browsers can't
+            # reach the private one) vs. what to actually bind sockets to.
+            - --external-ip=${TURN_HOST}/${TURN_PRIVATE_IP:?TURN_PRIVATE_IP must be set in .env}
+            - --use-auth-secret
+            - --static-auth-secret=${TURN_CREDENTIALS:?TURN_CREDENTIALS must be set in .env}
+            # Small range deliberately -- matches security_group.tf's opened
+            # port range. Each active TURN-relayed media stream holds one
+            # port for its duration; widen both together if staging ever
+            # needs to support more concurrent relayed participants than
+            # this comfortably covers.
+            - --min-port=49160
+            - --max-port=49200
+            # TURNS (TLS-wrapped TURN, port 5349) deliberately not enabled
+            # yet -- would need the Let's Encrypt cert wired in separately.
+            # Plain TURN/STUN already covers the failure mode this was
+            # added for (no relay fallback at all); revisit if a network
+            # specifically blocking non-TLS UDP/TCP ever turns up.
+            - --no-tls
+            - --no-dtls
+            - --no-cli
+            - --log-file=stdout
