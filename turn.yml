@@ -37,6 +37,12 @@ services:
             # candidates (the EC2 instance's Elastic IP, since browsers can't
             # reach the private one) vs. what to actually bind sockets to.
             - --external-ip=${TURN_HOST}/${TURN_PRIVATE_IP:?TURN_PRIVATE_IP must be set in .env}
+            # Without this, coturn auto-discovers EVERY local interface (the
+            # host's private IP, but also docker0 and the meet.jitsi bridge)
+            # and starts one relay listener per interface -- most of which
+            # advertise an address no external client can ever reach. Pins
+            # it to just the one interface --external-ip's pairing expects.
+            - --relay-ip=${TURN_PRIVATE_IP}
             - --use-auth-secret
             - --static-auth-secret=${TURN_CREDENTIALS:?TURN_CREDENTIALS must be set in .env}
             # Small range deliberately -- matches security_group.tf's opened
