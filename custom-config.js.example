@@ -21,3 +21,10 @@ config.exhibitViewer = {
     enabled: true,
     apiUrl: 'https://localhost:4000'
 };
+
+// Fortress identity service (FOR-50) -- same reasoning as exhibitViewer above:
+// editing Fortress/config.js alone is a no-op locally, so this has to live here.
+config.identityService = {
+    apiUrl: 'http://127.0.0.1:4300',
+    enabled: true
+};
