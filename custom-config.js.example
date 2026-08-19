@@ -19,7 +19,12 @@
 
 config.exhibitViewer = {
     enabled: true,
-    apiUrl: 'https://localhost:4000'
+    apiUrl: 'https://localhost:4000',
+    // -1 disables the client-side size check entirely (see validateExhibitFile,
+    // react/features/exhibit-viewer/functions.ts) -- without this override it defaults to
+    // MAX_FILE_SIZE (50MB, file-sharing/constants.ts). exhibit-service's own MAX_UPLOAD_BYTES
+    // (5GiB, S3's own single-PUT ceiling) is the real remaining limit either way.
+    maxFileSize: -1
 };
 
 // Fortress identity service (FOR-50) -- same reasoning as exhibitViewer above:

@@ -12,7 +12,10 @@
 
 config.exhibitViewer = {
     enabled: true,
-    apiUrl: 'https://staging.fortressconferencing.com/exhibit-api'
+    apiUrl: 'https://staging.fortressconferencing.com/exhibit-api',
+    // See custom-config.js.example's own comment -- -1 disables the client-side size check;
+    // exhibit-service's MAX_UPLOAD_BYTES (S3's single-PUT ceiling) is the real remaining limit.
+    maxFileSize: -1
 };
 
 // Without this, react/features/transcript/middleware.ts falls back to an
