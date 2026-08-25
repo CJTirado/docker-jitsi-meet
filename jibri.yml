@@ -30,6 +30,16 @@ services:
             - JIBRI_CHROMEDRIVER_DEBUG
             - JIBRI_CHROMEDRIVER_DEBUG_LOG
             - JIBRI_WEBHOOK_SUBSCRIBERS
+            # FOR-92: self-signed JWT Jibri uses both for webhook calls and to
+            # authenticate to identity-service's POST /api/jibri/e2ee-key.
+            - JIBRI_JWT_SIGNING_KEY_PATH
+            - JIBRI_JWT_KID
+            - JIBRI_JWT_ISSUER
+            - JIBRI_JWT_AUDIENCE
+            # FOR-92: identity-service base URL Jibri fetches the room's E2EE
+            # key from so recordings stay decodable under E2EE. Leave unset
+            # to skip -- recordings proceed unencrypted, same as today.
+            - JIBRI_E2EE_IDENTITY_SERVICE_URL
             - JIBRI_INSTANCE_ID
             - JIBRI_ENABLE_PROMETHEUS
             - JIBRI_FINALIZE_DURATION_TOLERANCE
