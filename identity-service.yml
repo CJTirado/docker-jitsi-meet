@@ -13,7 +13,13 @@
 services:
     identity-service:
         build:
-            context: ../identity-service
+            # Repo root, not ../identity-service alone -- src/lib/logo.ts
+            # reads the shared brand/logo-fragment.svg at
+            # ../../../brand/logo-fragment.svg (relative to dist/lib/ ->
+            # container root /brand), which lives outside identity-service/
+            # itself. See identity-service/Dockerfile's own comment.
+            context: ..
+            dockerfile: identity-service/Dockerfile
         image: fortress/identity-service:staging
         restart: ${RESTART_POLICY:-unless-stopped}
         env_file:
