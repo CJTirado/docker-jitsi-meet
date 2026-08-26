@@ -100,6 +100,38 @@ location ^~ /transcript-ws/panel {
     proxy_read_timeout 3600s;
 }
 
+# Deposition room links live under /r/<roomCode> (portal's buildJoinUrl,
+# format.ts), not a bare /<roomCode> -- a bare top-level path collided with
+# app routes: /verify (the portal's own magic-link landing route, reached
+# through this exact domain since the portal is hosted at /portal/, not a
+# separate origin) was being parsed as room name "verify" and joined as a
+# conference instead of ever reaching the portal SPA, because the base
+# jitsi-meet nginx config has exactly one bare-word location
+# (`location ~ ^/([^/?&:'"]+)$ { try_files $uri @root_path; }`, unconditional)
+# which matches ANY single path segment as "assume it's a room, serve the
+# SPA shell and let client JS sort it out." Stock jitsi-meet does support
+# a two-segment /tenant/room scheme that would have separated these
+# cleanly (react/features/base/util/uri.ts's parseStandardURIString
+# already treats the LAST path segment as the room and everything before
+# it as an ignored `tenant` -- confirmed by reading actions.web.ts, where
+# only `.room` is ever used for the actual join/validate calls, `.tenant`
+# never is), but that codepath is gated behind base meet.conf's
+# `{{ if $ENABLE_SUBDOMAINS }}` block, which staging doesn't set. Rather
+# than flip ENABLE_SUBDOMAINS globally (touches BOSH/websocket path
+# prefixing and other subdomain-mode behavior well beyond this one
+# problem), this location alone gives /r/<anything> the same "serve the
+# SPA shell, unrewritten URL" treatment that stock jitsi-meet's bare
+# single-segment location already gives every top-level path -- reusing
+# @root_path (defined earlier, unconditionally, in base meet.conf) rather
+# than duplicating its `rewrite ^/(.*)$ / break;`. ^~ takes precedence over
+# any regex location the same way the two proxy blocks below need it to,
+# though it isn't load-bearing today since ENABLE_SUBDOMAINS is unset here;
+# keeping it makes this location's behavior independent of that setting
+# either way.
+location ^~ /r/ {
+    try_files $uri @root_path;
+}
+
 # Serves the portal SPA (../portal/) under /portal/ on this same
 # domain/cert, same "avoid a second DNS record + Let's Encrypt cert"
 # rationale as /exhibit-api/ and /identity-api/ above -- unlike those two
