@@ -156,6 +156,24 @@ location ^~ /portal/ {
     try_files $uri $uri/ /portal/index.html;
 }
 
+# The trailing slash above is load-bearing: `location ^~ /portal/` only
+# matches a request URI that already starts with "/portal/" -- the bare
+# word "/portal" (no trailing slash, the obvious thing to type/link) is
+# one character short of that prefix and doesn't match, so it fell through
+# to the same single-segment room-catcher this whole file exists to work
+# around (see /r/'s comment above), silently joining a conference called
+# "portal" instead of ever reaching this app. An unauthenticated hit
+# self-heals by accident (auth_request 401s on the room-catcher location
+# same as everywhere else, redirecting to /gate/, which happens to restore
+# the trailing slash), which is why this only showed up for an
+# already-logged-into-the-gate browser. $scheme://$host, not a bare
+# relative path -- same reasoning as @gate_redirect below (nginx's
+# internal 8443 listen port would otherwise leak into the Location
+# header).
+location = /portal {
+    return 301 $scheme://$host/portal/;
+}
+
 # --- Password gate ---------------------------------------------------
 # Gates the ENTIRE staging site (not just an API path like the two blocks
 # above) behind a branded login page + signed cookie, checked via nginx's
@@ -279,4 +297,17 @@ location ^~ /gate/ {
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# Same bare-word gap as /portal above: "/gate" with no trailing slash
+# doesn't match `^~ /gate/`. Low real-world odds anyone hits this
+# specific one (every actual /gate/ link this file emits already carries
+# the slash -- @gate_redirect below, and the post-login bounce-back), but
+# it's the identical footgun and one line to close now that we know the
+# pattern exists, rather than waiting for a third bug report to notice it
+# again.
+location = /gate {
+    auth_request off;
+    allow all;
+    return 301 $scheme://$host/gate/;
 }
