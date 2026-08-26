@@ -42,6 +42,14 @@ COPY --chown=s6:s6 static/       /usr/share/jitsi-meet/static/
 COPY --chown=s6:s6 index.html    /usr/share/jitsi-meet/index.html
 COPY --chown=s6:s6 manifest.json /usr/share/jitsi-meet/manifest.json
 
+# portal/'s build (../portal/dist, built with VITE_BASE_PATH=/portal/ --
+# see that project's vite.config.ts), staged into $FRONTEND_DIST_DIR
+# alongside the meet client's own output. Served by
+# custom-meet.conf.staging.example's `location ^~ /portal/ { alias
+# /usr/share/jitsi-meet/portal/; ... }` block -- same domain/cert as
+# everything else on staging, not its own subdomain.
+COPY --chown=s6:s6 portal/       /usr/share/jitsi-meet/portal/
+
 # index.html pulls these in via nginx SSI (`<!--#include virtual="X" -->`).
 # Without them, SSI silently falls through to the base image's own stock
 # jitsi-meet-web versions -- e.g. title.html missing meant a staging join

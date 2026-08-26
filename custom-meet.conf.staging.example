@@ -100,6 +100,30 @@ location ^~ /transcript-ws/panel {
     proxy_read_timeout 3600s;
 }
 
+# Serves the portal SPA (../portal/) under /portal/ on this same
+# domain/cert, same "avoid a second DNS record + Let's Encrypt cert"
+# rationale as /exhibit-api/ and /identity-api/ above -- unlike those two
+# though, this isn't an API being reverse-proxied, it's a static SPA build
+# staged directly into this image's docroot (web-fortress/Dockerfile COPYs
+# portal/dist/ to /usr/share/jitsi-meet/portal/, alongside the meet
+# client's own assets). Built with VITE_BASE_PATH=/portal/ (vite.config.ts)
+# and matching identity-service PORTAL_BASE_URL=.../portal/ (mailer.ts's
+# buildPortalMagicLinkUrl) so its own emitted asset paths and magic-link
+# URLs agree with where it's actually served from.
+#
+# try_files' final arg (/portal/index.html) is a URI, not a literal file
+# path -- with `alias`, nginx re-enters location matching on it as an
+# internal redirect (matches this same ^~ /portal/ location again, so it
+# still resolves through the alias below), which is what makes SPA
+# client-side routing (e.g. a hard refresh on /portal/agency) fall through
+# to index.html instead of 404ing. Same ^~ precedence requirement as the
+# two proxy blocks above (stock meet.conf's tenant-subdomain regex location
+# would otherwise capture /portal/... first).
+location ^~ /portal/ {
+    alias /usr/share/jitsi-meet/portal/;
+    try_files $uri $uri/ /portal/index.html;
+}
+
 # --- Password gate ---------------------------------------------------
 # Gates the ENTIRE staging site (not just an API path like the two blocks
 # above) behind a branded login page + signed cookie, checked via nginx's
