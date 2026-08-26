@@ -156,24 +156,6 @@ location ^~ /portal/ {
     try_files $uri $uri/ /portal/index.html;
 }
 
-# The trailing slash above is load-bearing: `location ^~ /portal/` only
-# matches a request URI that already starts with "/portal/" -- the bare
-# word "/portal" (no trailing slash, the obvious thing to type/link) is
-# one character short of that prefix and doesn't match, so it fell through
-# to the same single-segment room-catcher this whole file exists to work
-# around (see /r/'s comment above), silently joining a conference called
-# "portal" instead of ever reaching this app. An unauthenticated hit
-# self-heals by accident (auth_request 401s on the room-catcher location
-# same as everywhere else, redirecting to /gate/, which happens to restore
-# the trailing slash), which is why this only showed up for an
-# already-logged-into-the-gate browser. $scheme://$host, not a bare
-# relative path -- same reasoning as @gate_redirect below (nginx's
-# internal 8443 listen port would otherwise leak into the Location
-# header).
-location = /portal {
-    return 301 $scheme://$host/portal/;
-}
-
 # --- Password gate ---------------------------------------------------
 # Gates the ENTIRE staging site (not just an API path like the two blocks
 # above) behind a branded login page + signed cookie, checked via nginx's
@@ -299,13 +281,65 @@ location ^~ /gate/ {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-# Same bare-word gap as /portal above: "/gate" with no trailing slash
-# doesn't match `^~ /gate/`. Low real-world odds anyone hits this
-# specific one (every actual /gate/ link this file emits already carries
-# the slash -- @gate_redirect below, and the post-login bounce-back), but
-# it's the identical footgun and one line to close now that we know the
-# pattern exists, rather than waiting for a third bug report to notice it
-# again.
+# Every reserved app path above (/exhibit-api/, /identity-api/, /r/,
+# /portal/, /gate/) is a trailing-slash-anchored prefix location -- the
+# bare word alone (no trailing slash, the obvious thing to type or link)
+# is one character short of each prefix and doesn't match it, so it fell
+# through to jitsi-meet's own single-segment location
+# (`location ~ ^/([^/?&:'"]+)$ { try_files $uri @root_path; }`, base
+# meet.conf, unconditional), which exists specifically to treat any
+# otherwise-unmatched single path segment as a room name and join it --
+# by design for real room names, but these reserved words must never be
+# recognized as one. First caught on /verify (fixed at the source
+# instead, see portal's buildJoinUrl/mailer.ts) and then /portal itself;
+# rather than wait for a third one-off bug report per reserved word,
+# these cover all of them at once. An unauthenticated hit still
+# self-heals without this (401 on the room-catcher redirects to
+# /gate/, which happens to restore the trailing slash) -- this closes
+# the gap for an already-gated-in browser, which is the case that
+# actually surfaced it.
+#
+# Five separate `location =` (exact-match) blocks, not one `location ~`
+# regex alternation -- deliberately. Exact-match locations have
+# unconditional top priority in nginx (checked before any prefix or
+# regex location, in any order), so this doesn't depend on this file's
+# include point (web/rootfs/defaults/meet.conf's `include
+# .../nginx-custom/*.conf;`) staying textually before the room-catcher
+# regex -- a `location ~` here would only win by matching first in file
+# order among regex locations, which is correct today but silently
+# fragile against a future reordering.
+#
+# auth_request off + allow all: matches /gate/'s own exemption below, on
+# the same reasoning -- the redirect target for every word except /gate
+# is itself still fully gated (its own location has no such exemption),
+# so this only skips the check on the redirect hop itself, never on the
+# actual content. $scheme://$host/word/, not a bare relative path -- same
+# reasoning as @gate_redirect below (nginx's internal 8443 listen port
+# would otherwise leak into the Location header).
+location = /exhibit-api {
+    auth_request off;
+    allow all;
+    return 301 $scheme://$host/exhibit-api/;
+}
+
+location = /identity-api {
+    auth_request off;
+    allow all;
+    return 301 $scheme://$host/identity-api/;
+}
+
+location = /r {
+    auth_request off;
+    allow all;
+    return 301 $scheme://$host/r/;
+}
+
+location = /portal {
+    auth_request off;
+    allow all;
+    return 301 $scheme://$host/portal/;
+}
+
 location = /gate {
     auth_request off;
     allow all;
