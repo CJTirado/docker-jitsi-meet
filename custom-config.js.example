@@ -33,3 +33,11 @@ config.identityService = {
     apiUrl: 'http://127.0.0.1:4300',
     enabled: true
 };
+
+// Fortress E2EE + recording (FOR-92) -- same reasoning as above: the repo's
+// checked-in config.js already sets config.e2ee.externallyManagedKey = true,
+// but that file is never actually served in local dev, so it has no effect
+// here without this override too.
+config.e2ee = {
+    externallyManagedKey: true
+};

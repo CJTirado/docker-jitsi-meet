@@ -39,3 +39,16 @@ config.identityService = {
     apiUrl: 'https://staging.fortressconferencing.com/identity-api',
     enabled: true
 };
+
+// Fortress E2EE + recording (FOR-92) -- same reasoning as above: the repo's
+// checked-in config.js already sets config.e2ee.externallyManagedKey = true,
+// but that file is never actually served (see web-fortress/Dockerfile -- it
+// doesn't copy config.js at all), so it has no effect without this override
+// too. Missing this is why E2EE never turned on for anyone on staging: the
+// automatic externally-managed-key path (middleware.ts's
+// _fetchExternallyManagedKey) silently no-ops without it, and the only
+// manual fallback (the Security dialog's E2EE toggle) was intentionally
+// removed from the toolbar earlier, leaving no way to ever enable E2EE.
+config.e2ee = {
+    externallyManagedKey: true
+};
