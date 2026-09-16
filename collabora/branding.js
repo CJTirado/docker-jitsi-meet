@@ -115,10 +115,6 @@ document.onkeyup = function(e) {
     var PREFIX = 'Fortress_';
     // Scroll fires continuously; this is the coalescing window before a position is sent.
     var THROTTLE_MS = 120;
-    // How long after applying a remote view to keep ignoring our own move/zoom events.
-    // Without this, applying a position fires the events that report it straight back and the
-    // two clients push each other around the document forever.
-    var ECHO_GUARD_MS = 250;
 
     var applying = false;
     var lastKey = '';
@@ -201,6 +197,45 @@ document.onkeyup = function(e) {
         post('ViewChanged', v);
     }
 
+    /**
+     * Scrolls to a fractional position, then verifies and retries.
+     *
+     * The retry is not defensive padding. Changing zoom resizes the document ASYNCHRONOUSLY --
+     * the tiles re-render and _docPixelSize grows or shrinks afterwards -- so a scroll issued
+     * in the same turn as a zoom change resolves its fraction against the OLD document height
+     * and gets clamped. Measured: applying zoom 16 with fy 0.45 to a Writer document landed at
+     * fy 0.032, pinned near the top, while the identical scroll with no zoom change landed at
+     * 0.44993. Without this the follower silently sits in the wrong place whenever the
+     * presenter zooms and scrolls together, and stays there if the presenter then stops moving.
+     */
+    function applyScroll(v, attempt, done) {
+        var l = layout(), d = docSize();
+
+        if (!l || !d || !d.x || !d.y) {
+            done();
+
+            return;
+        }
+
+        l.scrollTo(v.fx * d.x, v.fy * d.y);
+
+        if (attempt >= 4) {
+            done();
+
+            return;
+        }
+
+        setTimeout(function () {
+            var cur = read();
+
+            if (cur && (Math.abs(cur.fx - v.fx) > 0.005 || Math.abs(cur.fy - v.fy) > 0.005)) {
+                applyScroll(v, attempt + 1, done);
+            } else {
+                done();
+            }
+        }, 150);
+    }
+
     function apply(v) {
         var m = map(), l = layout();
 
@@ -233,23 +268,16 @@ document.onkeyup = function(e) {
                 // client identical without needing to model that curve.
                 m.setZoom(v.zoom);
             }
-
-            // Re-read AFTER the zoom change: the document's pixel size is a function of zoom,
-            // so normalising against the pre-zoom size would land in the wrong place.
-            var d = docSize();
-
-            if (d && d.x && d.y && typeof v.fx === 'number' && typeof v.fy === 'number') {
-                l.scrollTo(v.fx * d.x, v.fy * d.y);
-            }
         } catch (e) { /* internals moved; degrade to no sync rather than throwing */ }
 
-        setTimeout(function () {
-            applying = false;
-            // Re-baseline so the next genuine local move is not swallowed by the dedupe.
+        applyScroll(v, 0, function () {
+            // Re-baseline only once the scroll has actually settled, so the next genuine local
+            // move is not swallowed by the dedupe and the retries never echo back out.
             var cur = read();
 
             lastKey = cur ? cur.zoom + ':' + cur.fx.toFixed(4) + ':' + cur.fy.toFixed(4) : '';
-        }, ECHO_GUARD_MS);
+            applying = false;
+        });
     }
 
     window.addEventListener('message', function (e) {
