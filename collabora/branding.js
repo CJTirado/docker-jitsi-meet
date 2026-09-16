@@ -22,10 +22,13 @@
 // 1. Everything above the Fortress section is Collabora's file, copied byte for byte from
 //    CODE 26.04.3-1. Mounting this over theirs means their branding is now pinned at that
 //    version. On upgrade, re-copy their branding.js from the new image and re-append the
-//    Fortress section. It is kept rather than dropped deliberately: removing a vendor's
-//    product attribution from its own UI should be a deliberate decision, not a side effect
-//    of how we hooked in.
-// 2. The bridge uses UNDOCUMENTED internals (app.map, activeLayout.viewedRectangle,
+//    Fortress section. Their code is left intact rather than edited in place, so the two
+//    stay separable and the next upgrade is a re-copy rather than a merge.
+// 2. The toolbar logo their setLogo() wires up is hidden by the Fortress section, via CSS
+//    rather than by editing their function. That was a deliberate call (see hideVendorLogo),
+//    not a side effect of how we hooked in -- and it is the reason an upgrade must re-check
+//    the `#document-header` selector, which is the one piece of their DOM we now depend on.
+// 3. The bridge uses UNDOCUMENTED internals (app.map, activeLayout.viewedRectangle,
 //    _docLayer._docPixelSize). These can change in any release. Every access is guarded and
 //    the bridge degrades to doing nothing rather than throwing, so a broken upgrade costs
 //    viewport sync, not the viewer.
@@ -107,7 +110,46 @@ document.onkeyup = function(e) {
 };
 
 /* ------------------------------------------------------------------------- *
- * Fortress viewport-sync bridge. Everything above this line is Collabora's.
+ * Fortress additions. Everything above this line is Collabora's.
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Hides the product logo in the top-left of the toolbar.
+ *
+ * The element is `#document-header > a.document-logo`, which Collabora's own setLogo() above
+ * turns into a link out to collaboraonline.com. In a deposition the exhibit viewer is the
+ * product, and a vendor link sitting in the toolbar of a legal exhibit is both off-brand and
+ * a way out of the room mid-record.
+ *
+ * Collabora already ships a rule for this, but it is scoped
+ * `.main-nav.hasnotebookbar.readonly > #main-menu #document-header` -- i.e. only in the tabbed
+ * notebookbar UI. collabora.yml pins the server to compact mode (see its comment on
+ * user_interface.mode), so that selector never matches here and the logo stays visible. Hence
+ * an unconditional rule of our own.
+ *
+ * Done as CSS rather than by removing the node: the toolbar is re-rendered on context changes
+ * (the same behaviour that defeated Hide_NotebookTab -- see office-viewer/collabora.ts), and a
+ * removed element would simply come back. A stylesheet survives re-renders. `!important` is
+ * required because bundle.css later sets `#document-header{...;display:flex}` unconditionally.
+ *
+ * Note this is deliberately narrower than hiding vendor attribution generally: the About
+ * dialog and its "built on a great technology base" credit are untouched.
+ */
+(function hideVendorLogo() {
+    'use strict';
+
+    var style = document.createElement('style');
+
+    style.textContent = '#document-header { display: none !important; }';
+
+    // documentElement rather than head: this script is a plain <script> in cool.html and runs
+    // during parse, so <head> is present, but appending to the root works regardless of where
+    // Collabora moves the tag on a future upgrade.
+    (document.head || document.documentElement).appendChild(style);
+})();
+
+/* ------------------------------------------------------------------------- *
+ * Fortress viewport-sync bridge.
  * ------------------------------------------------------------------------- */
 (function () {
     'use strict';

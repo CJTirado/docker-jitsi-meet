@@ -174,6 +174,37 @@ location ^~ /browser/ {
     # JS/CSS, not any exhibit content.
     auth_request off;
     allow all;
+
+    # branding.js is OURS, mounted over Collabora's copy (see collabora.yml). Collabora serves
+    # everything under /browser/ with `cache-control: max-age=11059200` -- correct for the rest
+    # of that tree, whose paths are build-hashed and so change on every upgrade, and wrong for
+    # the one file in it we edit in place. Its URL never changes, so without this an edit is
+    # invisible for 128 days to any browser that has already loaded the editor once.
+    #
+    # Not hypothetical: bridge iterations were tested against a stale cached copy during
+    # development and read as the code not working. The bundle keeps its long cache -- scoping
+    # this to branding.js rather than relaxing the whole location matters, since bundle.js is
+    # ~3.7MB on every cold load.
+    #
+    # Nested inside the ^~ block deliberately. A regex location at server scope would lose to
+    # meet.conf's tenant regex (see the ^~ explanation on /exhibit-api/); nested, the outer
+    # prefix has already won the match and this only picks the handler within it. proxy_* has
+    # to be repeated because a nested location does not inherit the parent's proxy_pass.
+    location ~ ^/browser/[^/]+/branding\.js$ {
+        proxy_pass http://collabora:9980;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Replace rather than add: leaving Collabora's own header in place would send two
+        # conflicting Cache-Control values and let the browser pick.
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-cache" always;
+
+        auth_request off;
+        allow all;
+    }
 }
 
 # WOPI discovery + capabilities, hit by the client before it opens a document.
