@@ -100,6 +100,114 @@ location ^~ /transcript-ws/panel {
     proxy_read_timeout 3600s;
 }
 
+# Reverse-proxies Collabora Online (CODE), which renders Office exhibits --
+# especially spreadsheets -- natively in the exhibit viewer instead of as a
+# Gotenberg-converted PDF (see collabora.yml for why conversion is destructive
+# for a ledger). Same one-cert/one-DNS-record rationale as /exhibit-api/ above.
+#
+# Unlike the other upstreams here, Collabora is loaded in an IFRAME by each
+# participant's browser, so it has to be reachable at the public origin -- it
+# cannot live on the internal network only. The frontend builds the iframe URL
+# from config.exhibitViewer.collaboraUrl (custom-config.js.staging.example).
+#
+# NO prefix-stripping rewrite, and that is the important difference from every
+# other block in this file. Collabora serves its client from absolute paths of
+# its own (/browser/<hash>/..., /cool/...) which it also generates internally
+# into the HTML it returns; rewriting the prefix off would make the returned
+# page reference paths that don't exist at this origin. So the prefix IS
+# /browser and /cool, matching the upstream's real paths one-to-one.
+location ^~ /browser/ {
+    proxy_pass http://collabora:9980;
+    proxy_http_version 1.1;
+    # $http_host, NOT $host, for every Collabora block -- $host drops the port, and Collabora
+    # builds the WebSocket URL it hands the browser from this header. On a non-default port
+    # that produces a socket URL pointing at :80, and the editor fails with "Failed to
+    # establish socket connection ... the reverse proxy might be misconfigured" while every
+    # static asset loads fine -- a genuinely confusing failure, confirmed by reproducing it.
+    # Identical to $host on 443, so this costs nothing and removes the trap.
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Suppresses Collabora's welcome screen and its "Your Review Is Our Best Motivation"
+    # star-rating survey, both of which otherwise appear modally over the document -- the
+    # survey was seen firing mid-session during testing, and a rating dialog on top of an
+    # exhibit during testimony is not acceptable.
+    #
+    # Done here, at the proxy, rather than with coolwsd's own `--o:home_mode.enable=true`.
+    # home_mode is the only config switch for these popups (verified: `--o:welcome.enable`
+    # has no effect on either flag), but it also caps the WHOLE instance at 20 concurrent
+    # connections and 10 concurrent open documents -- confirmed from coolwsd's startup log --
+    # and one container serves every room, so those are totals across all depositions. Two
+    # simultaneous ten-person depositions would sit exactly at the connection cap.
+    #
+    # These two attributes on the editor's HTML are precisely what home_mode flips, so
+    # rewriting them in flight gets the popups gone while concurrency stays at coolwsd's
+    # compiled maximum (1000000). Verified end to end: document loads, chart/formulas/sheet
+    # tabs all render, WebSocket connects.
+    #
+    # Accept-Encoding must be cleared or sub_filter is handed a compressed body it cannot
+    # rewrite. That applies to the whole location, and this location also serves the editor's
+    # 3.7MB bundle.js -- so nginx re-compresses on the way out rather than sending it plain.
+    # Without the gzip line below this block is a real bandwidth regression, not a subtle one.
+    #
+    # Scoping the rewrite to cool.html alone would be preferable, but its path is
+    # build-hashed (/browser/<hash>/cool.html) so it cannot be written as a longer ^~ prefix,
+    # and demoting this to a plain prefix to allow a regex location would hand the path back
+    # to meet.conf's tenant regex -- see the ^~ explanation on /exhibit-api/ above.
+    proxy_set_header Accept-Encoding "";
+    gzip on;
+    gzip_proxied any;
+    # text/html is deliberately absent: nginx always gzips it and rejects it here as a
+    # duplicate. Same reason there is no `sub_filter_types` line -- text/html is its default.
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    sub_filter_once off;
+    sub_filter 'data-auto-show-feedback = "true"' 'data-auto-show-feedback = "false"';
+    sub_filter 'data-auto-show-welcome = "true"'  'data-auto-show-welcome = "false"';
+
+    # Collabora's static client bundle is fetched by the iframe without the
+    # gate cookie being meaningful to it, and a 302 to /gate/ inside an iframe
+    # produces a blank exhibit panel with no error. The document itself is
+    # still protected -- every byte of every exhibit goes through WOPI, which
+    # authenticates the room-scoped access_token independently of this gate
+    # (see exhibit-service/src/routes/wopi.ts). This exempts the editor's own
+    # JS/CSS, not any exhibit content.
+    auth_request off;
+    allow all;
+}
+
+# WOPI discovery + capabilities, hit by the client before it opens a document.
+location ^~ /hosting/ {
+    proxy_pass http://collabora:9980;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;   # see /browser/ above -- $host drops the port
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    auth_request off;
+    allow all;
+}
+
+# The document session itself, which is a long-lived WebSocket. Same
+# Upgrade/Connection/proxy_read_timeout treatment as /transcript-ws/panel
+# above and for the same reason -- nginx's 60s default would silently drop an
+# exhibit that sits open on screen during testimony.
+#
+# /cool/ carries both the WebSocket and Collabora's own callbacks; the
+# WebSocket headers are harmless on the plain-HTTP requests that share the
+# prefix, so one block covers both.
+location ^~ /cool/ {
+    proxy_pass http://collabora:9980;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $http_host;   # see /browser/ above -- $host drops the port
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 3600s;
+    auth_request off;
+    allow all;
+}
+
 # Deposition room links live under /r/<roomCode> (portal's buildJoinUrl,
 # format.ts), not a bare /<roomCode> -- a bare top-level path collided with
 # app routes: /verify (the portal's own magic-link landing route, reached

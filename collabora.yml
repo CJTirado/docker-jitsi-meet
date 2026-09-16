@@ -1,0 +1,114 @@
+# Overlay adding Collabora Online (CODE) to the same compose project/network as the rest of
+# the stack, so it gets the container-DNS name "collabora" on meet.jitsi. Renders Office
+# exhibits (docx/xlsx/pptx) natively in the exhibit viewer instead of as a converted PDF.
+#
+# MUST be brought up together with docker-compose.yml and exhibit-service.yml in one
+# invocation -- exhibit-service is the WOPI host Collabora fetches documents from:
+#
+#   docker compose --env-file .env -f docker-compose.yml -f exhibit-service.yml -f collabora.yml up -d
+#
+# WHY THIS EXISTS AT ALL, given Gotenberg already converts Office documents to PDF:
+# conversion is destructive for spreadsheets in a way it isn't for text documents. A ledger
+# converted to PDF is paginated by *columns as well as rows*, so a single transaction ends up
+# split across several pages -- measured on a representative 3-sheet, 40-row exhibit, one row
+# landed across pages 3, 4 and 5, with the "FLAGGED" note orphaned on a page of its own with
+# nothing to identify which row it belonged to. Cell addressing, sheet tabs, formulas and
+# cell comments are all lost. "Direct your attention to cell H47" is unanswerable from a PDF.
+#
+# ON THE PORT BINDING: unlike Gotenberg, this is NOT bound to 127.0.0.1. Collabora is loaded
+# in an iframe *by the participant's browser*, so it must be publicly reachable -- in staging
+# it is proxied under the main hostname by the web container's nginx, same as exhibit-service
+# and identity-service. The published port here is for local dev only.
+#
+# Access control is NOT Collabora's job: it fetches every document through the WOPI host
+# (exhibit-service), which authenticates the WOPI access_token -- the same room-scoped
+# exhibitAccessToken used everywhere else. Collabora itself holds no credentials and can only
+# reach what the WOPI host hands it.
+services:
+    collabora:
+        # TODO pin to a specific digest before this leaves local dev. `latest` is a rolling
+        # CODE release with no SLA (see Collabora's own "not recommended for production"
+        # note) -- an unpinned document server rendering legal exhibits is not something to
+        # let float.
+        image: collabora/code:latest
+        restart: ${RESTART_POLICY:-unless-stopped}
+        environment:
+            # Hosts allowed to embed the editor and act as WOPI hosts. Regex, dots escaped.
+            - aliasgroup1=${COLLABORA_WOPI_HOST:-https://localhost:8080}
+            # Collabora speaks plain HTTP inside the container either way; what
+            # ssl.termination controls is the *scheme it advertises to the browser* --
+            # true makes it emit https/wss URLs on the assumption something upstream
+            # terminates TLS.
+            #
+            # That distinction is not cosmetic. Behind the stack's nginx (staging) it must be
+            # true, or the browser is handed ws:// from an https page and the connection is
+            # blocked as mixed content. Standalone (local dev, no proxy) it must be false, or
+            # Collabora advertises wss:// against a plain-HTTP port and the socket fails with
+            # "Failed to establish socket connection ... reverse proxy might be misconfigured"
+            # -- which reads like a proxy bug when there is no proxy at all.
+            #
+            # user_interface.mode=compact selects the classic menubar+toolbar UI instead of
+            # the default tabbed "notebookbar" ribbon. Two reasons, one cosmetic and one not:
+            # an exhibit should look like a document rather than a spreadsheet editor, and the
+            # ribbon devotes a large fraction of a deposition screen to editing controls
+            # nobody is meant to use. Setting it here rather than flipping the client after
+            # load (Action_ChangeUIMode) matters -- the post-load flip renders the full ribbon
+            # first and then collapses it, so every participant sees a visible flash of a
+            # fully-featured editor before it disappears.
+            #
+            # Note the spelling: coolwsd calls these compact/tabbed, while the client-side
+            # postMessage API calls the same two modes classic/notebookbar.
+            #
+            # Autosave is disabled, and this is load-bearing rather than tidiness.
+            #
+            # The exhibit viewer tells participants when an exhibit has been altered during a
+            # session, and the signal it uses is Collabora's own Doc_ModifiedStatus, which is
+            # broadcast to every participant and -- measured -- is NOT retracted by an undo.
+            # That one-way property is exactly what makes it trustworthy as a notice.
+            #
+            # A completed save resets the flag to false. Since exhibit-service accepts and
+            # discards Collabora's autosave (see routes/wopi.ts), an autosave would make
+            # Collabora believe it had saved and clear the flag -- silently retracting a notice
+            # that a document had been altered, which is the one failure this feature cannot
+            # have. With autosave off there is no save, so the flag latches true and stays
+            # there for the life of the session.
+            #
+            # ON COLLABORA'S WELCOME SCREEN AND "Your Review Is Our Best Motivation" SURVEY:
+            # both are suppressed, but NOT here. They are stripped at the nginx proxy instead
+            # (custom-meet.conf.staging.example's /browser/ block rewrites the two flags in
+            # the editor HTML), because the only coolwsd-side switch is home_mode.enable --
+            # verified, `--o:welcome.enable` has no effect on either -- and home_mode also caps
+            # the whole instance at 20 concurrent connections and 10 concurrent open documents.
+            # Those are totals across every room, which a handful of simultaneous depositions
+            # would exhaust. Deliberately NOT set here, so concurrency stays at coolwsd's
+            # compiled maximum.
+            #
+            # Consequence for LOCAL DEV, where there is no nginx in front: the popups are live.
+            # The survey only triggers after 15+ document opens, so it is rare, but if it gets
+            # annoying add `--o:home_mode.enable=true` to a local override -- the caps are
+            # irrelevant on a one-person dev box.
+            - extra_params=--o:ssl.enable=false --o:ssl.termination=${COLLABORA_SSL_TERMINATION:-true} --o:user_interface.mode=compact --o:per_document.idlesave_duration_secs=0 --o:per_document.autosave_duration_secs=0
+            # No admin console in a deployment that is never administered interactively --
+            # it is one more authenticated surface on a box handling legal exhibits.
+            - DONT_GEN_SSL_CERT=true
+            - username=
+            - password=
+        volumes:
+            # Overrides Collabora's own branding.js, which cool.html loads as a plain <script>.
+            # That script tag is the only hook into the editor's page that does not require
+            # patching Collabora or rewriting its HTML at the proxy -- and it is what makes
+            # presenter scroll/zoom sync possible at all, since none of that is reachable
+            # through the postMessage API. The file keeps Collabora's own branding verbatim;
+            # see its header for the upgrade contract.
+            - ./collabora/branding.js:/usr/share/coolwsd/browser/dist/branding.js:ro
+        ports:
+            - '9980:9980'
+        networks:
+            meet.jitsi:
+        # A document server running LibreOffice per session; these are floors, not targets.
+        # Deliberately more generous than Gotenberg's 1g/2cpu, since a Collabora process
+        # stays resident for the length of a deposition rather than for one conversion.
+        mem_limit: 4g
+        cpus: 4
+        cap_add:
+            - MKNOD
